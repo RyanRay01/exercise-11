@@ -1,0 +1,261 @@
+---
+title: "exercise-11"
+output: html_document
+---
+
+### Load in Libraries
+```{r}
+library(tidyverse)
+library(skimr)
+library(infer)
+library(broom)
+
+```
+## Challenge 1
+### Load in “AVONETdataset1.csv” dataset using {tidyverse} read_csv()
+### function and winnow variables
+```{r}
+# Save file name
+f <- "https://raw.githubusercontent.com/difiore/ada-2024-datasets/main/AVONETdataset1.csv"
+
+# Read in file as dataset "d"
+d <- read_csv(f)
+
+# Winnow dataset to desired variables
+d <- d %>% select(c('Species1', 'Family1',
+              'Order1', 'Beak.Length_Culmen',
+              'Beak.Width', 'Beak.Depth', 
+              'Tarsus.Length', 'Wing.Length', 
+              'Tail.Length', 'Mass',
+              'Habitat', 'Migration',
+              'Trophic.Level', 'Trophic.Niche',
+              'Min.Latitude', 'Max.Latitude',
+              'Centroid.Latitude', 'Primary.Lifestyle',
+              'Range.Size'))
+
+# Use skim() to check variable types
+skim(d)
+
+# Species1, Family1, Order1, Habitat, Trophic.Level, Trophic.Niche, and Primary.Lifestyle are categorical variables, and Beak.Length_Culmen, Beak.Width, Beak.Depth, Tarsus.Length, Wing.Length, Tail.Length, Mass, Migration, Min.Latitude, Max.Latitude, Centroid.Latitude, and Range.Size are numerical 
+```
+
+### Step 1 
+```{r}
+# Convert "Migration" from a numeric to a categorical variable, check with class()
+d <- d %>% mutate(Migration = as.factor(Migration))
+
+class(d$Migration)
+
+# Create variable for log of Mass
+
+d <- d %>% mutate(log_Mass = log(Mass))
+
+# Create boxplots of log_Mass in relation to trophic level and migration type
+ggplot(data = d |> drop_na(Trophic.Level),
+        aes(x = Trophic.Level, y = log_Mass)) +
+  geom_boxplot() +
+  geom_jitter()
+
+ggplot(data = d |> drop_na(Migration),
+        aes(x = Migration, y = log_Mass)) +
+  geom_boxplot() +
+  geom_jitter()
+
+```
+
+### Step 2
+```{r}
+# use lm() to look at the relationship between log_Mass and Trophic.Level and between log_Mass and Migration.
+
+m1 <- lm(log_Mass ~ Trophic.Level, data = d)
+m2 <- lm(log_Mass ~ Migration, data = d)
+
+m1
+m2
+
+# Use summary to see the F-statistic and associated p-value. In both cases the F-statistic is sufficient to reject the null. log_Mass and Trophic.Level have an F-statistic of 78.42 and p-value < 2.2e-16, and log_Mass and Migration have an F-statistic of 144.5 and a p-value < 2.2e-16
+
+summary(m1)
+summary(m2)
+
+# Find the levels of "Migration" using the levels() function. The original reference level is "1" and the other levels are significantly different from it. Then use relevel() to relevel and assess the differences among the remaining categories. 
+
+levels(d$Migration)
+
+d$Migration <- relevel(d$Migration, ref = "2")
+m3 <- lm(data = d, log_Mass ~ Migration)
+summary(m3)
+
+d$Migration <- relevel(d$Migration, ref = "3")
+m4 <- lm(data = d, log_Mass ~ Migration)
+summary(m4)
+
+```
+
+### Step 3
+```{r}
+### Use aov() to create an ANOVA object and run a post-hoc Tukey Honest Significant Differences test using TukeyHSD()
+
+mAOV <- aov(log_Mass ~ Migration, data = d)
+mTukey <- TukeyHSD(mAOV, which = "Migration", ordered = TRUE, conf.level = 0.95)
+mTukey
+
+# Use plot() to visualize the TukeyHSD results, none of the CIs cross the 0 line, so all pairs are significant in their difference from the mean, according to our 95% CI interval.
+
+plot(mTukey, xlim = c(-.5,1))
+
+```
+
+### Step 4
+```{r}
+# Use {infer} package to generate a permuation distribution and calculate a p-value of the original test statistic using original F-statistic.
+
+null_dist <- d %>%
+  specify(log_Mass ~ Migration) %>%
+  hypothesize(null= "independence") %>%
+  generate(reps = 1000, type = "permute") %>%
+  calculate(stat = "F")
+
+original_F <- 144.5
+
+get_p_value(null_dist, original_F, direction = "both")
+
+```
+
+## Challenge 2
+### Step 1
+```{r}
+# Create variable relative beak length (RelBeakLength) as the residual of log(Beak.Length_Culmen) on log_Mass.
+d <- mutate(d, RelBeakLength = resid(lm(log(Beak.Length_Culmen) ~ log_Mass, data = d)))
+
+# Create variable relative tarsus length (RelTarsusLength), as the residual of log(Tarsus.Length) on log_Mass.
+d <- mutate(d, RelTarsusLength = resid(lm(log(Tarsus.Length) ~ log_Mass, data = d)))
+
+```
+
+### Step 2
+```{r}
+# Make a boxplot of relative tarsus length variable in relation to Primary.Lifestyle
+
+ggplot(d, aes(x = Primary.Lifestyle , y = RelBeakLength)) +
+  geom_boxplot()
+
+# Make a boxplot of relative beak length variable in relation to Trophic.Niche
+
+ggplot(d, aes(x = Trophic.Niche , y = RelTarsusLength)) +
+  geom_boxplot()
+
+```
+
+### Step 3
+```{r}
+# Drop rows with NAs in Migration using drop_na() and then check using is.na()
+grsM <- d %>% drop_na(Migration)
+grsM <- grsM %>% drop_na(Range.Size)
+
+sum(is.na(grsM$Migration))
+sum(is.na(grsM$Migration))
+
+# Check distribution of Range.Size using hist(); it is heavily skewed
+hist(grsM$Range.Size)
+
+# Check distribution of the log of Range.Size; it is more normally distributed
+hist(log(grsM$Range.Size))
+
+# Run an ANOVA of log of range size on migration, migration has a significant effect on range size. 
+rsAOV <- aov(log(Range.Size) ~ Migration, data = grsM)
+summary(rsAOV)
+
+# Use lm() to measure effect of each migration type on range size. All three migration types have significant effect on range size. 
+
+rsLm3 <- lm(data = grsM, log(Range.Size) ~ Migration)
+summary(rsLm3)
+
+# The reference level is migration type 3. 
+
+# Relevel model with migration types 1 & 2 as references. All show significance.
+
+grsM$Migration <- relevel(grsM$Migration, ref = "2")
+rsLm2 <- lm(data = grsM, log(Range.Size) ~ Migration)
+summary(rsLm2)
+
+grsM$Migration <- relevel(grsM$Migration, ref = "1")
+rsLm1 <- lm(data = grsM, log(Range.Size) ~ Migration)
+summary(rsLm1)
+
+# Conduct post-hoc TukeyHSD test and visualize significance using plot(). All pairs are significantly different from zero.
+rsTukey <- TukeyHSD(rsAOV, which = "Migration", ordered = TRUE, conf.level = 0.95)
+rsTukey
+
+plot(rsTukey, xlim = c(-.5,3))
+```
+
+### Step 4
+```{r}
+# Winnow data to only consider “Passeriformes”
+
+p <- filter(d, Order1 == "Passeriformes")
+
+# Run ANOVA on relative beak length and primary lifestyle
+rblPLAOV <- aov(RelBeakLength ~ Primary.Lifestyle, data = p)
+summary(rblPLAOV)
+
+# Run ANOVA on relative beak length and trophic level
+rblTLAOV <- aov(RelBeakLength ~ Trophic.Level, data = p)
+summary(rblTLAOV)
+
+# Run ANOVA on relative beak length and the combination of primary lifestyle and trophic level
+rblPLTLAOV <- aov(RelBeakLength ~ Primary.Lifestyle + Trophic.Level, data = p)
+summary(rblPLTLAOV)
+
+# Run a linear model on relative beak length and the predictor variables primary lifestyle and trophic level. From these models it appears that Primary Lifestyle has a significant effect on relative beak length as well as the herbivores and omnivores in trophic level but not the carnivores.
+
+rblPLlm <- lm(RelBeakLength ~ Primary.Lifestyle, data = p)
+summary(rblPLlm)
+
+rblTLlm <- lm(RelBeakLength ~ Trophic.Level, data = p)
+summary(rblTLlm)
+
+```
+
+### Step 7
+```{r}
+# Run a two factor ANOVA on relative beak length and both primary lifestyle and trophic level. Relative beak length is significantly affected by both of these predictor variables, as well as the combination of them.
+rblBoth <- aov(RelBeakLength ~ Primary.Lifestyle * Trophic.Level, data = p)
+summary(rblBoth)
+
+```
+
+### Step 6
+```{r}
+# Run a two factor ANOVA on relative beak length and both Primary Lifestyle and Trophic Level using ":" operator. Both methods give the same results.
+rblBothc <- aov(RelBeakLength ~ Primary.Lifestyle + Trophic.Level + Primary.Lifestyle:Trophic.Level, data = p)
+summary(rblBothc)
+```
+
+### Step 7
+```{r}
+# Use interaction.plot() to visualize the interaction between Primary.Lifestyle and Trophic.Level
+interaction.plot(
+  x.factor = d$Primary.Lifestyle,
+  xlab = "Primary Lifestyle",
+  trace.factor = d$Trophic.Level,
+  trace.label = "Trophic Level",
+  response = d$RelBeakLength,
+  fun = base::mean, 
+  ylab = "Relative Beak Length"
+)
+```
+
+### Additional Steps
+```{r}
+
+
+
+
+```
+
+
+
+
+
